@@ -1,34 +1,59 @@
 import os
-from typing import List, Optional, Dict
-from langchain_astradb import AstraDBVectorStore
+from typing import List, Dict, Optional, Any
 from langchain_core.documents import Document
-from config import ASTRA_DB_API_ENDPOINT, ASTRA_DB_APPLICATION_TOKEN, COLLECTION_NAME
+from langchain_astradb import AstraDBVectorStore
 from finrag.model_factory import get_huggingface_embeddings
+from config import (
+    ASTRA_DB_API_ENDPOINT,
+    ASTRA_DB_APPLICATION_TOKEN,
+    COLLECTION_NAME
+)
 
 class FinRAGVectorStore:
     def __init__(self):
-        # IDENTICAL to Notebook: Use standard embedding model
-        self.embeddings = get_huggingface_embeddings()
+        """
+        Step 3: Embedding & Vector Storage interface.
+        """
+        self.embedding = get_huggingface_embeddings()
         
-        # Initialize AstraDB (Cloud version of FAISS/Chroma from notebook)
+        # Initialize connection
+        # autodetect behavior: Use content_field explicit for empty DB support
         self.vectorstore = AstraDBVectorStore(
-            embedding=self.embeddings,
+            embedding=self.embedding,
             collection_name=COLLECTION_NAME,
             api_endpoint=ASTRA_DB_API_ENDPOINT,
             token=ASTRA_DB_APPLICATION_TOKEN,
+            autodetect_collection=False,
+            content_field="page_content"
         )
 
     def add_documents(self, documents: List[Document]):
         """
-        Standard add_documents, identical to notebook's behavior.
+        Stores chunks in AstraDB.
         """
-        if not documents:
-            return
         self.vectorstore.add_documents(documents)
-        print(f"Stored {len(documents)} vectors in AstraDB.")
+        print(f"Stored {len(documents)} chunks in AstraDB.")
 
-    def similarity_search(self, query: str, k: int = 4, filter: Optional[Dict] = None) -> List[Document]:
+    def delete_user_data(self, user_id: str):
         """
-        Standard similarity search with strict metadata filtering.
+        Step 12: Cleanup logic.
+        Deletes all documents for a specific user to prevent storage waste logic.
         """
-        return self.vectorstore.similarity_search(query, k=k, filter=filter)
+        try:
+            print(f"Cleaning up old data for User: {user_id}...")
+            # Direct AstraPy fix to delete via metadata filter
+            self.vectorstore.astra_env.collection.delete_many(
+                filter={"user_id": user_id}
+            )
+            print(f"Cleanup complete for user: {user_id}")
+            
+        except Exception as e:
+            print(f"Cleanup Warning: {e} (Continuing ingestion)")
+
+    def similarity_search_with_score(
+        self, query: str, k: int = 4, filter: Optional[Dict[str, Any]] = None
+    ) -> List[tuple[Document, float]]:
+        """
+        Step 5 & 6: Retrieval & Context Validation support.
+        """
+        return self.vectorstore.similarity_search_with_score(query, k=k, filter=filter)

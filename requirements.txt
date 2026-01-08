@@ -11,3 +11,5 @@ torch
 accelerate
 sentence-transformers
 pypdf
+pandas
+plotly

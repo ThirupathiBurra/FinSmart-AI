@@ -1,9 +1,6 @@
-from typing import List
+from typing import List, Dict, Optional
 from langchain_core.documents import Document
 from finrag.astradb_vectorstore import FinRAGVectorStore
-
-# IDENTICAL Logic to Reference Notebook
-# No complex classes, just functional retrieval with intent detection.
 
 class FinRAGRetriever:
     def __init__(self, vectorstore: FinRAGVectorStore):
@@ -11,27 +8,54 @@ class FinRAGRetriever:
 
     def detect_intent(self, question: str) -> str:
         """
-        Simple intent detection from Notebook.
+        Step 4: Query Understanding.
+        Analyzes intent to drive retrieval strategy.
         """
         question = question.lower()
         if any(x in question for x in ["summarize", "overview", "brief", "report"]):
             return "SUMMARY"
         return "SPECIFIC"
 
-    def retrieve(self, query: str, user_id: str) -> List[Document]:
+    def retrieve(self, query: str, user_id: str, session_id: str) -> List[Document]:
         """
-        Retrieves documents based on intent.
+        Step 5: Context Retrieval.
+        Adapts depth based on intent.
+        Strictly filters by user identity and session.
         """
         intent = self.detect_intent(query)
-        print(f"Query: {query} | Intent: {intent}")
+        print(f"Retrieval Request | Query: '{query}' | Intent: {intent} | User: {user_id}")
         
-        # Alignment with Notebook Logic:
-        # Summary -> k=5
-        # Specific -> k=3
-        k = 5 if intent == "SUMMARY" else 3
+        # Adaptive Retrieval Depth
+        # Summary: Needs broad context (but kept to 4 for speed optimization)
+        # Specific: Needs focused context
+        if intent == "SUMMARY":
+            k = 4
+            score_threshold = 0.35 
+        else:
+            k = 4
+            score_threshold = 0.35
         
-        # Strict user_id filtering
-        filter_dict = {"user_id": user_id}
+        # Metadata Filters (Step 3 Requirement)
+        filter_dict = {
+            "user_id": user_id,
+            "session_id": session_id
+        }
         
-        docs = self.vectorstore.similarity_search(query, k=k, filter=filter_dict)
-        return docs
+        # Step 6: Context Validation
+        results_with_scores = self.vectorstore.similarity_search_with_score(query, k=k, filter=filter_dict)
+        
+        validated_docs = []
+        rejected_count = 0
+        
+        for doc, score in results_with_scores:
+            if score >= score_threshold:
+                # Inject relevance score for transparency
+                doc.metadata["relevance_score"] = score 
+                validated_docs.append(doc)
+            else:
+                rejected_count += 1
+                
+        if rejected_count > 0:
+             print(f"Validation: Rejected {rejected_count} chunks below threshold {score_threshold}")
+        
+        return validated_docs

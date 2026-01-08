@@ -1,68 +1,74 @@
 import os
-import tempfile
-from typing import IO
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader, UnstructuredExcelLoader
+import datetime
+import uuid
+from typing import List, Optional
+
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, CSVLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
+from langchain_core.documents import Document
 from finrag.astradb_vectorstore import FinRAGVectorStore
+from config import CHUNK_SIZE, CHUNK_OVERLAP
 
-def ingest_file(uploaded_file: IO, filename: str, user_id: str):
+def ingest_file(file_obj, filename: str, user_id: str, session_id: str) -> int:
     """
-    Ingests a file EXACTLY like the FinRAG Reference Notebook:
-    1. Load
-    2. Split (RecursiveCharacterTextSplitter)
-    3. Metadata tagging
-    4. Store
+    Implements Step 1 (Ingestion) & Step 2 (Chunking) & Step 3 (Metadata).
+    Also triggers Step 12 (Cleanup).
     """
-    print(f"Starting ingestion for {filename} (User: {user_id})")
+    print(f"Ingesting {filename} for Session: {session_id}")
     
-    # 1. Load File
-    suffix = ".pdf" if filename.endswith(".pdf") else ".txt" 
-    # Handle others for completeness if useful, but focusing on PDF
-    if filename.endswith(".csv"): suffix = ".csv"
-    if filename.endswith(".xlsx"): suffix = ".xlsx"
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(uploaded_file.read())
-        tmp_path = tmp.name
+    # 1. Save temp file
+    temp_path = f"temp_{filename}"
+    with open(temp_path, "wb") as f:
+        f.write(file_obj.getvalue())
         
     try:
-        if filename.lower().endswith(".pdf"):
-            loader = PyPDFLoader(tmp_path)
-            docs = loader.load()
-        elif filename.lower().endswith(".csv"):
-            loader = CSVLoader(tmp_path)
-            docs = loader.load()
-        elif filename.lower().endswith((".xls", ".xlsx")):
-            loader = UnstructuredExcelLoader(tmp_path)
-            docs = loader.load()
+        # Step 1: Ingestion
+        if filename.endswith(".pdf"):
+            loader = PyPDFLoader(temp_path)
+        elif filename.endswith(".txt"):
+            loader = TextLoader(temp_path)
+        elif filename.endswith(".csv"):
+            loader = CSVLoader(temp_path)
         else:
-            loader = TextLoader(tmp_path)
-            docs = loader.load()
-    finally:
-        os.remove(tmp_path)
-        
-    # 2. Chunking (Identical to Notebook)
-    # chunk_size=1000, chunk_overlap=100
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000, 
-        chunk_overlap=100
-    )
-    chunks = text_splitter.split_documents(docs)
-    
-    # 3. Metadata (Identical to Notebook)
-    for i, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = i
-        chunk.metadata["source"] = filename
-        chunk.metadata["user_id"] = user_id # Critical for AstraDB filtering
-        
-        # Ensure page exists
-        if "page" not in chunk.metadata:
-            chunk.metadata["page"] = "Unknown"
+            raise ValueError("Unsupported file format")
             
-    # 4. Storage
-    vectorstore = FinRAGVectorStore()
-    vectorstore.add_documents(chunks)
-    
-    print(f"Ingestion complete. Added {len(chunks)} chunks.")
-    return len(chunks)
+        pages = loader.load()
+        print(f" -> Loaded {len(pages)} pages.")
+        
+        # Step 2: Intelligent Chunking (Optimized Size)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CHUNK_SIZE,
+            chunk_overlap=CHUNK_OVERLAP
+        )
+        chunks = text_splitter.split_documents(pages)
+        
+        # Step 3: Metadata Enrichment
+        # Prevents context loss and enables traceability.
+        timestamp = datetime.datetime.now().isoformat()
+        
+        for i, chunk in enumerate(chunks):
+            chunk.metadata["chunk_id"] = i
+            chunk.metadata["source"] = filename
+            chunk.metadata["user_id"] = user_id
+            chunk.metadata["session_id"] = session_id  # Traceability
+            chunk.metadata["upload_timestamp"] = timestamp
+            
+            # Simulated "Section" metadata (page number serves as proxy)
+            if "page" not in chunk.metadata:
+                chunk.metadata["page"] = "Unknown"
+        
+        print(f" -> Created {len(chunks)} chunks with metadata.")
+        
+        # Step 12: Cleanup (No Waste)
+        vectorstore = FinRAGVectorStore()
+        vectorstore.delete_user_data(user_id)
+        
+        # Step 3 (Store): Embedding & Vector Storage
+        vectorstore.add_documents(chunks)
+        
+        return len(chunks)
+        
+    finally:
+        # Local Cleanup
+        if os.path.exists(temp_path):
+            os.remove(temp_path)

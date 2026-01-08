@@ -17,19 +17,8 @@ st.set_page_config(
 )
 
 # Custom CSS for styling
-st.markdown("""
-<style>
-    .metric-card {
-        background-color: #1e1e1e;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.5);
-    }
-    .stApp {
-        background-color: #0e1117;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Custom CSS removed for cleaner look
+# st.markdown("""...""", unsafe_allow_html=True)
 
 # sidebar
 with st.sidebar:
@@ -173,9 +162,19 @@ def answer_general_finance_question(question: str) -> str:
         You are a financial calculator.
         Task: Perform the requested calculation.
         Question: "{question}"
-        Show the formula and steps.
+        
+        STRICT OUTPUT FORMAT:
+        Summary: (The final answer in plain text)
+        
+        Key Steps:
+        (Explain the calculation in simple sentences)
+        
+        Note:
+        (Any assumptions in plain text)
+        
+        CRITICAL: Do NOT use markdown, code blocks, or bold text. Write as normal paragraph text.
         """
-        return call_llm(prompt, max_tokens=600, temperature=0.1)
+        return call_llm(prompt, max_tokens=800, temperature=0.1)
 
     # 2. Tax / Context Branch (RAG)
     tax_keywords = ["tax", "slab", "regime", "deduction", "section", "80c", "old", "new"]
@@ -200,19 +199,84 @@ def answer_general_finance_question(question: str) -> str:
         {context}
         
         Question: "{question}"
+        
+        STRICT OUTPUT FORMAT:
+        Summary: (Direct answer in plain text)
+        
+        Key Details:
+        (Explain the rule using simple bullet points without markdown symbols like **)
+        
+        Advice:
+        (Practical tip in plain text)
+        
+        CRITICAL: Do NOT use markdown, code blocks, or bold text. Write as normal paragraph text.
         """
-        return call_llm(prompt, max_tokens=400, temperature=0.1)
+        return call_llm(prompt, max_tokens=800, temperature=0.1)
 
-    # 3. General Knowledge Branch (Open)
+    # 3. Comparison / Difference Branch
+    if any(k in q_lower for k in ["difference", "vs", "compare", "better", "versus"]):
+        prompt = f"""
+        You are a Financial Advisor.
+        Compare the following concepts nicely in plain text.
+        
+        Question: "{question}"
+        
+        STRICT OUTPUT FORMAT:
+        Summary: (Short simple overview of the major difference)
+        
+        Comparison:
+        - (Point 1 comparison)
+        - (Point 2 comparison)
+        - (Point 3 comparison)
+        
+        Decision:
+        (Practical takeaway on which one to choose)
+        
+        CRITICAL: Do NOT use markdown tables or code blocks. Use simple bullet points.
+        """
+        return call_llm(prompt, max_tokens=600, temperature=0.3)
+
+    # 4. Relationship / Impact Branch
+    if any(k in q_lower for k in ["relationship", "affect", "impact", "effect", "link", "correlation", "cause"]):
+        prompt = f"""
+        You are a Financial Educator.
+        Explain the relationship or cause-and-effect link.
+        
+        Question: "{question}"
+        
+        STRICT OUTPUT FORMAT:
+        Summary: (One-line summary of the connection)
+        
+        Mechanism:
+        - (Step 1 -> Step 2: Explain the flow using '->' or similar indicators)
+        - (Cause -> Effect: Clear directional logic)
+        
+        Takeaway:
+        (Practical implication for the user in plain text)
+        
+        CRITICAL: Use '->' to show flow. Do NOT use markdown code blocks.
+        """
+        return call_llm(prompt, max_tokens=600, temperature=0.3)
+
+    # 5. General Knowledge Branch (Open)
     prompt = f"""
     You are a friendly Indian Financial Educator.
     Explain the following concept clearly to a beginner.
     
     Question: "{question}"
     
-    Answer concisely (under 150 words).
+    STRICT OUTPUT FORMAT:
+    Summary: (Clear definition in plain text)
+    
+    Key Points:
+    (Explain the concept using simple dashes for lists. Do not use bold/markdown)
+    
+    Advice:
+    (Actionable tip in plain text)
+    
+    CRITICAL: Do NOT use markdown, code blocks, or bold text. Write as normal paragraph text.
     """
-    return call_llm(prompt, max_tokens=300, temperature=0.7)
+    return call_llm(prompt, max_tokens=800, temperature=0.5)
 
 def fin_smart_router(user_input: str):
     intent = detect_user_intent(user_input)
@@ -287,6 +351,9 @@ if query:
         
         if result["type"] == "general_answer":
             txt_response = result.get("response", "").strip()
+            # Cleanup code blocks if present
+            txt_response = txt_response.replace("```markdown", "").replace("```", "").strip()
+            
             if not txt_response:
                 txt_response = "I apologize, but I couldn't generate a response. Please check your query or try rephrasing."
             st.markdown(txt_response)
