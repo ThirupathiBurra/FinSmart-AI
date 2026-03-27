@@ -3,7 +3,6 @@ from crewai import Task
 from textwrap import dedent
 from tools import (
     scrape_tool,
-    tavily_tool,
     calculate,
     get_company_filings,
     search_internet,
@@ -46,7 +45,6 @@ class StockAnalysisTasks():
       expected_output="A comprehensive report summarizing latest news, market sentiment, and potential impacts on the stock.",
       tools=[
         scrape_tool,
-        tavily_tool,
         search_internet,
         yahoo_finance_news,
         get_company_filings,
@@ -92,7 +90,6 @@ class StockAnalysisTasks():
       expected_output="A comprehensive quantitative financial analysis with detailed tables of all key metrics, ratios, growth rates, and peer comparisons.",
       tools=[
         scrape_tool,
-        tavily_tool,
         calculate,
         get_company_filings,
         get_financial_metrics,
@@ -127,7 +124,6 @@ class StockAnalysisTasks():
       expected_output="An expanded report highlighting significant findings from SEC filings, including red flags and positive indicators.",
       tools=[
         scrape_tool,
-        tavily_tool,
         get_company_filings
       ],
       agent=agent
@@ -202,7 +198,6 @@ class StockAnalysisTasks():
       expected_output="A professional investment report with comprehensive tables, metrics, ratios, and data-driven recommendations in MARKDOWN format.",
       tools=[
         scrape_tool,
-        tavily_tool,
         search_internet,
         calculate,
         yahoo_finance_news,

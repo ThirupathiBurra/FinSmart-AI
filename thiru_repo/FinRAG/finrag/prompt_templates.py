@@ -14,6 +14,7 @@ RULES:
 3. **NO META-TALK**: Do not provide "Additional Context" or explain what is missing. If information is not found, stated "Not specified in the document."
 4. **CITATIONS**: Mandatory format: [Page X].
 5. **FORMAT**: Direct bullet points. No introductory text (e.g., "Based on the document...").
+6. **SUMMARIES**: If the user asks for a summary or general information, provide a comprehensive summary of the core business or financial content in the context. Ignore boilerplate legal disclaimers.
 
 CONTEXT:
 {context}

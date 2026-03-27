@@ -16,44 +16,7 @@ from tasks import StockAnalysisTasks
 from crewai import Crew, Process
 
 
-def fix_markdown_formatting(text: str) -> str:
-    """
-    Fix malformed markdown from CrewAI output.
-    CrewAI sometimes returns markdown tables on single lines with pipes
-    but missing newlines. This function ensures proper line breaks so that
-    ReactMarkdown can parse tables, headers, and lists correctly.
-    """
-    if not text:
-        return text
-
-    # 1. Normalize: replace literal \n with actual newlines if needed
-    text = text.replace('\\n', '\n')
-
-    # 2. Fix table rows on single lines:
-    #    Pattern: "| col1 | col2 | |" without newlines
-    #    Ensure each | ... | row starts on a new line
-    text = re.sub(r'\s*\|\s*\|', ' |\n|', text)
-
-    # 3. Ensure a blank line before a table starts if it's appended to a paragraph
-    #    E.g. "some text. | Metric |" -> "some text.\n\n| Metric |"
-    text = re.sub(r'([a-zA-Z0-9\.\?!])\s+(\|\s*[a-zA-Z])', r'\1\n\n\2', text)
-
-    # 4. Ensure separator rows (|---|---| or |:---|) are on their own lines  
-    text = re.sub(r'([^\n])\s*(\|[-:\s]+\|)', r'\1\n\2', text)
-
-    # 5. Ensure markdown headers start on new lines
-    text = re.sub(r'([^\n])(\s*#{1,4}\s)', r'\1\n\n\2', text)
-
-    # 6. Fix "**Bold Text**" sections that should be headers
-    text = re.sub(r'([^\n])\s*\*\*([A-Z][A-Za-z\s&]+)\*\*\s*', r'\1\n\n## \2\n', text)
-
-    # 7. Ensure bullet points start on new lines
-    text = re.sub(r'([^\n])\s*(- [A-Z])', r'\1\n\2', text)
-
-    # 8. Clean up excessive whitespace/newlines
-    text = re.sub(r'\n{4,}', '\n\n\n', text)
-
-    return text.strip()
+# Removed fix_markdown_formatting as it corrupted LLM tables
 
 
 class CrewService:
@@ -108,8 +71,7 @@ class CrewService:
                 None, lambda: crew.kickoff(inputs={"company": company})
             )
             
-            # Build the full report from ALL task outputs
-            # Each task produces a section: Research, Financial Analysis, Filings, Recommendation
+            # Build the full report from ALL task outputs recursively
             analysis_text = ""
             section_names = [
                 "Market Research & News Analysis",
@@ -135,18 +97,14 @@ class CrewService:
                 
                 if sections:
                     analysis_text = f"# Investment Report: {company}\n\n" + "\n\n---\n\n".join(sections)
-                    logger.info(f"Built report from {len(sections)} task outputs, total length={len(analysis_text)}")
             
-            # Fallback to .raw if tasks_output didn't work
+            # Fallback to single .raw output if tasks_output didn't work
             if not analysis_text or len(analysis_text) < 500:
-                if hasattr(result, 'raw') and result.raw and len(result.raw) > 200:
+                if hasattr(result, 'raw') and result.raw:
                     analysis_text = result.raw
-                    logger.info(f"Using .raw fallback, length={len(analysis_text)}")
-                elif not analysis_text:
+                else:
                     analysis_text = str(result)
-            
-            # Fix markdown formatting (tables, headers, line breaks)
-            analysis_text = fix_markdown_formatting(analysis_text)
+                
             logger.info(f"Final analysis length: {len(analysis_text)} chars")
             
             return {

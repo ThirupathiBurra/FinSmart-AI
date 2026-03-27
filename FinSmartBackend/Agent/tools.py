@@ -1,7 +1,7 @@
 import os
 import json
 import requests
-from crewai_tools import ScrapeWebsiteTool, SerperDevTool
+from crewai_tools import ScrapeWebsiteTool
 from crewai.tools import tool
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -11,7 +11,6 @@ load_dotenv()
 
 # Initialize tools
 scrape_tool = ScrapeWebsiteTool()
-tavily_tool = SerperDevTool()
 
 # Basic calculator tool
 @tool("Calculator")
@@ -37,8 +36,11 @@ def get_recent_dates(days_back=90):
 
 def parse_financial_data(response):
     """Safely parse API responses"""
-    if isinstance(response, dict) and 'data' in response:
-        return response['data']
+    if isinstance(response, dict):
+        if 'error' in response:
+            return f"API Data Error: {response['error']} - {response.get('message', '')}. If due to insufficient credits or not found, proceed without this specific data and use qualitative information."
+        if 'data' in response:
+            return response['data']
     return response
 
 def resolve_company_to_ticker(company_or_ticker: str) -> str:
@@ -58,7 +60,18 @@ def resolve_company_to_ticker(company_or_ticker: str) -> str:
 @tool("Search the internet")
 def search_internet(query: str):
     """Search the internet for information"""
-    return tavily_tool.run(query)
+    api_key = os.getenv("TAVILY_API_KEY")
+    if not api_key:
+        return "Search Error: TAVILY_API_KEY not found."
+    try:
+        url = "https://api.tavily.com/search"
+        resp = requests.post(url, json={"api_key": api_key, "query": query, "search_depth": "basic"})
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            return [{"title": r.get("title"), "content": r.get("content")} for r in results[:5]]
+        return f"Search failed: {resp.text}"
+    except Exception as e:
+        return f"Search exception: {str(e)}"
 
 @tool("Get Yahoo Finance News")
 def yahoo_finance_news(ticker: str, max_results: int = 10):
@@ -108,7 +121,7 @@ def get_financial_metrics(ticker: str, period: str = "quarterly", limit: int = 8
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/financial-metrics"
     params = {"ticker": ticker, "period": period, "limit": limit}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Financial Metrics Snapshot")
 def get_financial_metrics_snapshot(ticker: str):
@@ -116,7 +129,7 @@ def get_financial_metrics_snapshot(ticker: str):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/financial-metrics/snapshot"
     params = {"ticker": ticker}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Financial Statements")
 def get_financial_statements(ticker: str, period: str = "quarterly", limit: int = 8):
@@ -124,7 +137,7 @@ def get_financial_statements(ticker: str, period: str = "quarterly", limit: int 
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/financials"
     params = {"ticker": ticker, "period": period, "limit": limit}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Segmented Revenues")
 def get_segmented_revenues(ticker: str, period: str = "quarterly", limit: int = 20):
@@ -132,7 +145,7 @@ def get_segmented_revenues(ticker: str, period: str = "quarterly", limit: int = 
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/segmented-revenue"
     params = {"ticker": ticker, "period": period, "limit": limit}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Recent Insider Trades")
 def get_insider_trades(ticker: str, limit: int = 20, filing_date_gte: str = None):
@@ -144,7 +157,7 @@ def get_insider_trades(ticker: str, limit: int = 20, filing_date_gte: str = None
     
     url = f"{BASE_URL}/insider-trades"
     params = {"ticker": ticker, "limit": limit, "filing_date_gte": filing_date_gte}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Institutional Ownership")
 def get_institutional_ownership(ticker: str, limit: int = 20, report_period_gte: str = None):
@@ -156,7 +169,7 @@ def get_institutional_ownership(ticker: str, limit: int = 20, report_period_gte:
     
     url = f"{BASE_URL}/institutional-ownership"
     params = {"ticker": ticker, "limit": limit, "report_period_gte": report_period_gte}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Earnings Press Releases")
 def get_earnings_press_releases(ticker: str, limit: int = 4):
@@ -164,7 +177,7 @@ def get_earnings_press_releases(ticker: str, limit: int = 4):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/earnings/press-releases"
     params = {"ticker": ticker, "limit": limit}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Analyst Estimates")
 def get_analyst_estimates(ticker: str):
@@ -172,7 +185,7 @@ def get_analyst_estimates(ticker: str):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/analyst-estimates"
     params = {"ticker": ticker}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Company Filings")
 def get_company_filings(ticker: str, limit: int = 10):
@@ -180,13 +193,13 @@ def get_company_filings(ticker: str, limit: int = 10):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/filings"
     params = {"ticker": ticker, "limit": limit}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Stock Screener")
 def stock_screener(query_params: dict):
     """Screen stocks based on criteria (market cap, P/E, sector, etc.)."""
     url = f"{BASE_URL}/screener"
-    return requests.get(url, headers=HEADERS, params=query_params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=query_params).json())
 
 @tool("Get Financial Media News")
 def get_media_news(ticker: str, limit: int = 10, start_date: str = None, end_date: str = None):
@@ -200,7 +213,7 @@ def get_media_news(ticker: str, limit: int = 10, start_date: str = None, end_dat
     
     url = f"{BASE_URL}/news"
     params = {"ticker": ticker, "limit": limit, "start_date": start_date, "end_date": end_date}
-    return requests.get(url, headers=HEADERS, params=params).json()
+    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
 
 @tool("Get Marketaux News")
 def get_marketaux_news(symbols: str, limit: int = 10):

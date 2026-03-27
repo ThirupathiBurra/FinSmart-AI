@@ -55,4 +55,4 @@ crew = Crew(
 
 # Start the task execution
 result = crew.kickoff(inputs={"company": "Infosys.NS"})
-print(result)
+print(str(result).encode('utf-8', errors='replace').decode('utf-8'))

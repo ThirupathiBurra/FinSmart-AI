@@ -8,7 +8,6 @@ load_dotenv()
 
 from tools import (
     scrape_tool,
-    tavily_tool,
     calculate,
     get_company_filings,
     search_internet,
@@ -40,7 +39,6 @@ class StockAnalysisAgents():
       llm=llm,
       tools=[
         scrape_tool,
-        tavily_tool,
         calculate,
         get_company_filings,
         get_key_financial_ratios
@@ -61,7 +59,6 @@ class StockAnalysisAgents():
       llm=llm,
       tools=[
         scrape_tool,
-        tavily_tool,
         search_internet,
         yahoo_finance_news,
         get_company_filings,
@@ -83,7 +80,6 @@ class StockAnalysisAgents():
       llm=llm,
       tools=[
         scrape_tool,
-        tavily_tool,
         search_internet,
         calculate,
         yahoo_finance_news,
