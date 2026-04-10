@@ -97,6 +97,7 @@ export default function StockAnalyzer() {
     e.preventDefault();
     if (!ticker) return;
     setLoading(true); setError(null); setResult(null);
+    
     try {
       const res = await fetch('http://localhost:8000/api/portfolio/analyze', {
         method: 'POST',

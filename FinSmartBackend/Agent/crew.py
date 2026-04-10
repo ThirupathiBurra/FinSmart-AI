@@ -38,21 +38,14 @@ crew = Crew(
   tasks=tasks_list,
   process=Process.sequential,
   memory=False,
-  cache=False,
+  cache=True,  # Enable caching to avoid duplicate tool calls
   max_rpm=100,
-  share_crew=True,
-  # Context management optimizations
-  embedder={
-      "provider": "openai",
-      "config": {
-          "model": "text-embedding-3-small"
-      }
-  },
-  full_output=False,  # Reduce output verbosity
-  max_iter=15  # Limit iterations per task
+  share_crew=False,
+  full_output=False,
+  max_iter=10  # Reduced from 15
 )
 
 
 # Start the task execution
-result = crew.kickoff(inputs={"company": "Infosys.NS"})
+result = crew.kickoff(inputs={"company": "AAPL"})
 print(str(result).encode('utf-8', errors='replace').decode('utf-8'))

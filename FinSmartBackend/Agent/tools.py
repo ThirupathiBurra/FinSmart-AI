@@ -1,6 +1,8 @@
 import os
+import re
 import json
 import requests
+from functools import lru_cache
 from crewai_tools import ScrapeWebsiteTool
 from crewai.tools import tool
 import yfinance as yf
@@ -8,6 +10,9 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Global HTTP timeout for all external API requests (seconds)
+API_TIMEOUT = 10
 
 # Initialize tools
 scrape_tool = ScrapeWebsiteTool()
@@ -22,14 +27,14 @@ def calculate(operation: str):
         return "Invalid calculation"
 
 # --- COMPANY NAME / TICKER RESOLVER ---
-def get_default_dates(years_back=5):
-    """Default to 5 years of data for most analyses"""
+def get_default_dates(years_back=1):
+    """Default to 1 year of data (reduced from 5 for performance)"""
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=years_back*365)).strftime("%Y-%m-%d")
     return start_date, end_date
 
-def get_recent_dates(days_back=90):
-    """Default to recent 90 days for news/insiders"""
+def get_recent_dates(days_back=30):
+    """Default to recent 30 days for news/insiders"""
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
     return start_date, end_date
@@ -43,9 +48,25 @@ def parse_financial_data(response):
             return response['data']
     return response
 
+# Regex for valid ticker formats: AAPL, INFY.NS, BRK-B, etc.
+_TICKER_RE = re.compile(r'^[A-Z]{1,5}([.-][A-Z]{1,3})?$')
+
+# Cache resolved tickers to avoid repeated yfinance API calls
+# During a single crew run the same ticker is resolved 15-30+ times
+@lru_cache(maxsize=64)
 def resolve_company_to_ticker(company_or_ticker: str) -> str:
-    """Universal company-to-ticker resolver"""
+    """Universal company-to-ticker resolver with caching.
+    
+    Skips the expensive yfinance lookup if the input already
+    looks like a valid ticker symbol (e.g. AAPL, INFY.NS).
+    """
     company_or_ticker = company_or_ticker.upper().strip()
+    
+    # If it already looks like a ticker, return immediately
+    if _TICKER_RE.match(company_or_ticker):
+        return company_or_ticker
+    
+    # Only do the expensive yfinance lookup for company names
     try:
         ticker_obj = yf.Ticker(company_or_ticker)
         info = ticker_obj.info
@@ -65,22 +86,31 @@ def search_internet(query: str):
         return "Search Error: TAVILY_API_KEY not found."
     try:
         url = "https://api.tavily.com/search"
-        resp = requests.post(url, json={"api_key": api_key, "query": query, "search_depth": "basic"})
+        resp = requests.post(url, json={"api_key": api_key, "query": query, "search_depth": "basic"}, timeout=API_TIMEOUT)
         if resp.status_code == 200:
             results = resp.json().get("results", [])
-            return [{"title": r.get("title"), "content": r.get("content")} for r in results[:5]]
-        return f"Search failed: {resp.text}"
+            return [{"title": r.get("title"), "content": r.get("content")[:500]} for r in results[:3]]
+        return f"Search failed: {resp.text[:200]}"
     except Exception as e:
         return f"Search exception: {str(e)}"
 
 @tool("Get Yahoo Finance News")
-def yahoo_finance_news(ticker: str, max_results: int = 10):
-    """Get latest news from Yahoo Finance"""
+def yahoo_finance_news(ticker: str, max_results: int = 5):
+    """Get latest news from Yahoo Finance (max 5 articles)"""
     ticker = resolve_company_to_ticker(ticker)
     try:
         stock = yf.Ticker(ticker)
         news = stock.news[:max_results]
-        return news
+        # Return only essential fields to reduce context size
+        simplified = []
+        for n in news:
+            simplified.append({
+                "title": n.get("title", ""),
+                "publisher": n.get("publisher", ""),
+                "link": n.get("link", ""),
+                "type": n.get("type", "")
+            })
+        return simplified
     except Exception as e:
         return f"Error fetching news: {str(e)}"
 
@@ -93,9 +123,9 @@ BASE_URL = "https://api.financialdatasets.ai"
 
 @tool("Get Stock Prices")
 def get_stock_prices(ticker: str, start_date: str = None, end_date: str = None):
-    """Get historical stock price data"""
+    """Get historical stock price data (last 6 months by default)"""
     ticker = resolve_company_to_ticker(ticker)
-    default_start, default_end = get_default_dates()
+    default_start, default_end = get_default_dates(years_back=0.5)
     if not start_date:
         start_date = default_start
     if not end_date:
@@ -103,8 +133,16 @@ def get_stock_prices(ticker: str, start_date: str = None, end_date: str = None):
     
     url = f"{BASE_URL}/prices"
     params = {"ticker": ticker, "start_date": start_date, "end_date": end_date}
-    response = requests.get(url, headers=HEADERS, params=params).json()
-    return response
+    try:
+        response = requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json()
+        # Limit response size - only return last 30 data points
+        if isinstance(response, dict) and 'prices' in response:
+            response['prices'] = response['prices'][-30:]
+        return response
+    except requests.Timeout:
+        return {"error": "Stock prices API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Company Facts")
 def get_company_facts(ticker: str):
@@ -112,16 +150,25 @@ def get_company_facts(ticker: str):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/company-facts"
     params = {"ticker": ticker}
-    response = requests.get(url, headers=HEADERS, params=params).json()
-    return response
+    try:
+        return requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json()
+    except requests.Timeout:
+        return {"error": "Company facts API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Financial Metrics")
-def get_financial_metrics(ticker: str, period: str = "quarterly", limit: int = 8):
-    """Get key financial ratios (P/E, margins, ROE, etc.). Defaults to quarterly, last 8 quarters (2 years)."""
+def get_financial_metrics(ticker: str, period: str = "quarterly", limit: int = 4):
+    """Get key financial ratios (P/E, margins, ROE, etc.). Defaults to quarterly, last 4 quarters (1 year)."""
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/financial-metrics"
     params = {"ticker": ticker, "period": period, "limit": limit}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Financial metrics API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Financial Metrics Snapshot")
 def get_financial_metrics_snapshot(ticker: str):
@@ -129,55 +176,85 @@ def get_financial_metrics_snapshot(ticker: str):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/financial-metrics/snapshot"
     params = {"ticker": ticker}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Financial metrics snapshot API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Financial Statements")
-def get_financial_statements(ticker: str, period: str = "quarterly", limit: int = 8):
-    """Get income statement, balance sheet, cash flow. Defaults to quarterly, last 8 quarters (2 years)."""
+def get_financial_statements(ticker: str, period: str = "quarterly", limit: int = 4):
+    """Get income statement, balance sheet, cash flow. Defaults to quarterly, last 4 quarters (1 year)."""
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/financials"
     params = {"ticker": ticker, "period": period, "limit": limit}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Financial statements API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Segmented Revenues")
-def get_segmented_revenues(ticker: str, period: str = "quarterly", limit: int = 20):
+def get_segmented_revenues(ticker: str, period: str = "quarterly", limit: int = 8):
     """Get revenue by business segment (Auto/Energy for Tesla, etc.)."""
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/segmented-revenue"
     params = {"ticker": ticker, "period": period, "limit": limit}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Segmented revenue API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Recent Insider Trades")
-def get_insider_trades(ticker: str, limit: int = 20, filing_date_gte: str = None):
-    """Get recent insider trading (defaults to last year, 20 most recent)."""
+def get_insider_trades(ticker: str, limit: int = 10, filing_date_gte: str = None):
+    """Get recent insider trading (defaults to last 90 days, 10 most recent)."""
     ticker = resolve_company_to_ticker(ticker)
-    default_start, _ = get_recent_dates(days_back=365)
+    default_start, _ = get_recent_dates(days_back=90)
     if not filing_date_gte:
         filing_date_gte = default_start
     
     url = f"{BASE_URL}/insider-trades"
     params = {"ticker": ticker, "limit": limit, "filing_date_gte": filing_date_gte}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Insider trades API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Institutional Ownership")
-def get_institutional_ownership(ticker: str, limit: int = 20, report_period_gte: str = None):
-    """Get top institutional holders and ownership changes (20 largest)."""
+def get_institutional_ownership(ticker: str, limit: int = 10, report_period_gte: str = None):
+    """Get top institutional holders and ownership changes (10 largest)."""
     ticker = resolve_company_to_ticker(ticker)
-    default_start, _ = get_recent_dates(days_back=365)
+    default_start, _ = get_recent_dates(days_back=180)
     if not report_period_gte:
         report_period_gte = default_start
     
     url = f"{BASE_URL}/institutional-ownership"
     params = {"ticker": ticker, "limit": limit, "report_period_gte": report_period_gte}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Institutional ownership API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Earnings Press Releases")
-def get_earnings_press_releases(ticker: str, limit: int = 4):
-    """Get management commentary from earnings calls (last 4 quarters)."""
+def get_earnings_press_releases(ticker: str, limit: int = 2):
+    """Get management commentary from earnings calls (last 2 quarters)."""
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/earnings/press-releases"
     params = {"ticker": ticker, "limit": limit}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Earnings press releases API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Analyst Estimates")
 def get_analyst_estimates(ticker: str):
@@ -185,27 +262,42 @@ def get_analyst_estimates(ticker: str):
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/analyst-estimates"
     params = {"ticker": ticker}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Analyst estimates API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Company Filings")
-def get_company_filings(ticker: str, limit: int = 10):
-    """Get SEC filings (10 most recent)."""
+def get_company_filings(ticker: str, limit: int = 5):
+    """Get SEC filings (5 most recent)."""
     ticker = resolve_company_to_ticker(ticker)
     url = f"{BASE_URL}/filings"
     params = {"ticker": ticker, "limit": limit}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Company filings API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Stock Screener")
 def stock_screener(query_params: dict):
     """Screen stocks based on criteria (market cap, P/E, sector, etc.)."""
     url = f"{BASE_URL}/screener"
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=query_params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=query_params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Stock screener API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Financial Media News")
-def get_media_news(ticker: str, limit: int = 10, start_date: str = None, end_date: str = None):
-    """Get recent financial news (defaults to 30 days, 10 articles)."""
+def get_media_news(ticker: str, limit: int = 5, start_date: str = None, end_date: str = None):
+    """Get recent financial news (defaults to 14 days, 5 articles)."""
     ticker = resolve_company_to_ticker(ticker)
-    default_start, default_end = get_recent_dates(days_back=30)
+    default_start, default_end = get_recent_dates(days_back=14)
     if not start_date:
         start_date = default_start
     if not end_date:
@@ -213,16 +305,21 @@ def get_media_news(ticker: str, limit: int = 10, start_date: str = None, end_dat
     
     url = f"{BASE_URL}/news"
     params = {"ticker": ticker, "limit": limit, "start_date": start_date, "end_date": end_date}
-    return parse_financial_data(requests.get(url, headers=HEADERS, params=params).json())
+    try:
+        return parse_financial_data(requests.get(url, headers=HEADERS, params=params, timeout=API_TIMEOUT).json())
+    except requests.Timeout:
+        return {"error": "Financial news API timed out"}
+    except Exception as e:
+        return {"error": str(e)}
 
 @tool("Get Marketaux News")
-def get_marketaux_news(symbols: str, limit: int = 10):
+def get_marketaux_news(symbols: str, limit: int = 5):
     """
     Get financial news from Marketaux API for given stock symbols.
     
     Args:
         symbols (str): Stock symbols separated by comma (e.g., 'AAPL,TSLA' or 'INFY.NS')
-        limit (int): Number of news articles to fetch (default: 10, max: 50)
+        limit (int): Number of news articles to fetch (default: 5)
     
     Returns:
         dict: News articles with metadata
@@ -235,12 +332,12 @@ def get_marketaux_news(symbols: str, limit: int = 10):
         return {"error": "MARKETAUX_API_KEY not found in environment variables"}
     
     try:
-        conn = http.client.HTTPSConnection('api.marketaux.com')
+        conn = http.client.HTTPSConnection('api.marketaux.com', timeout=API_TIMEOUT)
         
         params = urllib.parse.urlencode({
             'api_token': api_token,
             'symbols': symbols,
-            'limit': min(limit, 50),  # Cap at 50
+            'limit': min(limit, 10),
         })
         
         conn.request('GET', '/v1/news/all?{}'.format(params))
@@ -249,9 +346,13 @@ def get_marketaux_news(symbols: str, limit: int = 10):
         
         conn.close()
         
-        # Parse JSON response
-        import json
-        return json.loads(data.decode('utf-8'))
+        result = json.loads(data.decode('utf-8'))
+        # Trim article content to reduce context size
+        if 'data' in result and isinstance(result['data'], list):
+            for article in result['data']:
+                if 'description' in article and article['description']:
+                    article['description'] = article['description'][:300]
+        return result
         
     except Exception as e:
         return {"error": f"Failed to fetch news from Marketaux: {str(e)}"}
@@ -275,16 +376,6 @@ def get_key_financial_ratios(ticker: str):
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        
-        # Get financials for calculated ratios
-        try:
-            balance_sheet = stock.balance_sheet
-            cashflow = stock.cashflow
-            income_stmt = stock.income_stmt
-        except:
-            balance_sheet = None
-            cashflow = None
-            income_stmt = None
         
         ratios = {
             "ticker": ticker,
@@ -354,37 +445,4 @@ def get_key_financial_ratios(ticker: str):
     except Exception as e:
         return {"error": f"Failed to fetch financial ratios: {str(e)}"}
 
-# --- UNIVERSAL COMPOSITE TOOL (WORKS FOR ANY COMPANY) ---
-
-@tool("Get Complete Stock Analysis")
-def get_complete_stock_analysis(company_or_ticker: str, years_back: int = 3, recent_days: int = 90):
-    """
-    COMPLETE investment analysis for ANY company:
-    - Financials (quarterly/annual)
-    - Valuation metrics
-    - Insider trades (recent)
-    - News (recent 90 days)
-    - Institutional ownership
-    """
-    ticker = resolve_company_to_ticker(company_or_ticker)
-    
-    # Safe API caller
-    def safe_call(func, *args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            return {"error": str(e)}
-    
-    # Gather all data
-    data = {
-        "ticker": ticker,
-        "company_facts": safe_call(get_company_facts, ticker),
-        "financial_metrics": safe_call(get_financial_metrics, ticker, period="quarterly", limit=12),
-        "financial_statements": safe_call(get_financial_statements, ticker, period="quarterly", limit=8),
-        "insider_trades": safe_call(get_insider_trades, ticker, limit=20),
-        "institutional_ownership": safe_call(get_institutional_ownership, ticker, limit=20),
-        "recent_news": safe_call(get_media_news, ticker, limit=10),
-        "analyst_estimates": safe_call(get_analyst_estimates, ticker),
-    }
-    
-    return data
+# Note: Composite tool removed — individual tools are used by the crew agents directly.

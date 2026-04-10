@@ -13,16 +13,22 @@ from tools import (
     search_internet,
     yahoo_finance_news,
     get_marketaux_news,
-    get_key_financial_ratios
+    get_key_financial_ratios,
+    get_media_news,
+    get_financial_metrics,
+    get_financial_statements,
+    get_stock_prices,
+    get_insider_trades,
+    get_institutional_ownership
 )
 
-# Configure LLM using the new Nvidia API key
+# Configure LLM using the Nvidia API key
 llm = LLM(
     model="meta/llama-3.3-70b-instruct",
     base_url="https://integrate.api.nvidia.com/v1",
     api_key=os.getenv("NVIDIA_API_KEY"),
-    temperature=0.7,
-    max_tokens=4096
+    temperature=0.5,  # Lower temp for more focused, faster responses
+    max_tokens=3000   # Reduced from 4096 to speed up generation
 )
 
 
@@ -30,61 +36,61 @@ class StockAnalysisAgents():
   def financial_analyst(self):
     return Agent(
       role='The Best Financial Analyst',
-      goal="""Impress all customers with your financial data 
-      and market trends analysis""",
-      backstory="""The most seasoned financial analyst with 
-      lots of expertise in stock market analysis and investment
-      strategies that is working for a super important customer.""",
+      goal="""Analyze financial data and metrics for the target stock quickly and accurately.""",
+      backstory="""You are a seasoned financial analyst who efficiently gathers 
+      and analyzes financial metrics. You focus on the most important data points 
+      and avoid unnecessary tool calls. Always use the ticker symbol directly.""",
       verbose=True,
       llm=llm,
       tools=[
-        scrape_tool,
         calculate,
         get_company_filings,
-        get_key_financial_ratios
+        get_key_financial_ratios,
+        get_financial_metrics,
+        get_financial_statements,
+        get_stock_prices
       ],
-      allow_delegation=True
+      allow_delegation=False,  # CRITICAL: prevent circular delegation loops
+      max_iter=3  # Per-agent iteration cap
     )
 
   def research_analyst(self):
     return Agent(
       role='Staff Research Analyst',
-      goal="""Being the best at gathering, interpreting data and amaze
-      your customer with it""",
-      backstory="""Known as the BEST research analyst, you're
-      skilled in sifting through news, company announcements, 
-      and market sentiments. Now you're working on a super 
-      important customer""",
+      goal="""Quickly gather the most important recent news and market sentiment for the target stock.""",
+      backstory="""You are a fast and efficient research analyst. You gather 
+      key news and sentiment data without over-searching. Use at most 2-3 
+      tool calls to gather sufficient research data.""",
       verbose=True,
       llm=llm,
       tools=[
-        scrape_tool,
         search_internet,
         yahoo_finance_news,
-        get_company_filings,
+        get_media_news,
         get_marketaux_news
       ],
-      allow_delegation=True
+      allow_delegation=False,  # CRITICAL: prevent circular delegation loops
+      max_iter=3  # Per-agent iteration cap
   )
 
   def investment_advisor(self):
     return Agent(
       role='Private Investment Advisor',
-      goal="""Impress your customers with full analyses over stocks
-      and completes investment recommendations""",
-      backstory="""You're the most experienced investment advisor
-      and you combine various analytical insights to formulate
-      strategic investment advice. You are now working for
-      a super important customer you need to impress.""",
+      goal="""Synthesize all research and financial analysis into a clear, 
+      data-driven investment recommendation. Use the data already gathered 
+      by other agents rather than making redundant API calls.""",
+      backstory="""You're an experienced investment advisor who creates 
+      concise, actionable investment reports. You rely primarily on the 
+      context from previous tasks and only make minimal additional tool 
+      calls if critical data is missing.""",
       verbose=True,
       llm=llm,
       tools=[
-        scrape_tool,
-        search_internet,
         calculate,
-        yahoo_finance_news,
-        get_marketaux_news,
-        get_key_financial_ratios
+        get_key_financial_ratios,
+        get_insider_trades,
+        get_institutional_ownership
       ],
-      allow_delegation=False
+      allow_delegation=False,
+      max_iter=3  # Per-agent iteration cap
     )

@@ -1,10 +1,10 @@
 """Crew service wrapper for stock analysis"""
 import sys
 import os
-import re
 import asyncio
 import logging
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -15,63 +15,78 @@ from agents import StockAnalysisAgents
 from tasks import StockAnalysisTasks
 from crewai import Crew, Process
 
+# Dedicated thread pool for crew execution (prevents blocking the event loop)
+_crew_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="crew")
 
-# Removed fix_markdown_formatting as it corrupted LLM tables
+# Maximum time to wait for crew analysis (seconds)
+CREW_TIMEOUT = 300  # 5 minutes max
 
 
 class CrewService:
     """Service for executing stock analysis crew"""
     
     def __init__(self):
-        """Initialize agents and tasks"""
-        self.agents = StockAnalysisAgents()
-        self.tasks = StockAnalysisTasks()
+        """Initialize agents and tasks factories"""
+        self.agents_factory = StockAnalysisAgents()
+        self.tasks_factory = StockAnalysisTasks()
+    
+    def _run_crew_sync(self, company: str) -> dict:
+        """Synchronous crew execution (runs in thread pool)"""
+        # Create FRESH agents and tasks for each run to avoid state leakage
+        financial_analyst = self.agents_factory.financial_analyst()
+        research_analyst = self.agents_factory.research_analyst()
+        investment_advisor = self.agents_factory.investment_advisor()
         
-        # Initialize agents
-        self.financial_analyst = self.agents.financial_analyst()
-        self.research_analyst = self.agents.research_analyst()
-        self.investment_advisor = self.agents.investment_advisor()
+        research_task = self.tasks_factory.research(research_analyst)
+        financial_task = self.tasks_factory.financial_analysis(financial_analyst)
+        filings_task = self.tasks_factory.filings_analysis(financial_analyst)
+        recommend_task = self.tasks_factory.recommend(investment_advisor)
+        
+        # Create crew with optimized settings
+        crew = Crew(
+            agents=[
+                financial_analyst,
+                research_analyst,
+                investment_advisor
+            ],
+            tasks=[
+                research_task,
+                financial_task,
+                filings_task,
+                recommend_task
+            ],
+            process=Process.sequential,
+            memory=False,
+            cache=True,  # Enable caching to avoid duplicate tool calls within the run
+            max_rpm=100,
+            share_crew=False,
+            full_output=True,
+            max_iter=10,  # Reduced from 15 — prevent runaway iterations
+            verbose=True
+        )
+        
+        logger.info(f"Starting crew kickoff for {company}")
+        result = crew.kickoff(inputs={"company": company})
+        logger.info(f"Crew kickoff completed for {company}")
+        return result
     
     async def analyze_stock(self, company: str) -> dict:
         """
-        Run stock analysis crew
+        Run stock analysis crew without timeout protection as requested
         """
         try:
-            # Create tasks
-            research_task = self.tasks.research(self.research_analyst)
-            financial_task = self.tasks.financial_analysis(self.financial_analyst)
-            filings_task = self.tasks.filings_analysis(self.financial_analyst)
-            recommend_task = self.tasks.recommend(self.investment_advisor)
-            
-            # Create crew
-            crew = Crew(
-                agents=[
-                    self.financial_analyst,
-                    self.research_analyst,
-                    self.investment_advisor
-                ],
-                tasks=[
-                    research_task,
-                    financial_task,
-                    filings_task,
-                    recommend_task
-                ],
-                process=Process.sequential,
-                memory=False,
-                cache=False,
-                max_rpm=100,
-                share_crew=True,
-                full_output=True,
-                max_iter=15
-            )
-            
-            # Execute crew in a thread pool (kickoff is synchronous/blocking)
+            # Fix windows console UnicodeEncodeError for emojis during crew execution
+            import sys
+            import io
+            if sys.stdout.encoding.lower() != 'utf-8':
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, lambda: crew.kickoff(inputs={"company": company})
-            )
             
-            # Build the full report from ALL task outputs recursively
+            # Run crew in thread pool without timeout
+            result = await loop.run_in_executor(_crew_executor, self._run_crew_sync, company)
+            
+            # Build the full report from ALL task outputs
             analysis_text = ""
             section_names = [
                 "Market Research & News Analysis",

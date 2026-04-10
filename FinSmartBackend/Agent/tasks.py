@@ -36,6 +36,11 @@ class StockAnalysisTasks():
         
         IMPORTANT: DO NOT include a main title like "## Market Research" at the beginning of your text. Just provide the substantive content.
         
+        EFFICIENCY RULES:
+        - Use at most 2-3 tool calls total
+        - Do NOT call search_internet more than once
+        - Do NOT scrape websites, just use the search and news tools
+        
         {self.__tip_section()}
   
         Make sure to use the most recent data as possible.
@@ -44,10 +49,8 @@ class StockAnalysisTasks():
       """),
       expected_output="A comprehensive report summarizing latest news, market sentiment, and potential impacts on the stock.",
       tools=[
-        scrape_tool,
         search_internet,
         yahoo_finance_news,
-        get_company_filings,
         get_media_news,
         get_company_facts
       ],
@@ -82,20 +85,22 @@ class StockAnalysisTasks():
         1. DO NOT include a main title like "## Financial Analysis" at the beginning of your text. Just provide the substantive content.
         2. DO NOT prematurely assume a company is completely private without data. Search extensively for any publicly reported revenues, margins, or valuations (e.g., funding rounds, press releases). If traditional stock metics are unavailable, provide the metrics you CAN find in a clean format rather than a wall of "N/A"s.
         3. ALWAYS format markdown tables with proper newlines. Every row of the table MUST be on a new line. Do NOT output table rows on a single continuous line.
-
+        
+        EFFICIENCY RULES:
+        - Use at most 3 tool calls total
+        - Start with get_key_financial_ratios which gives you most data in one call
+        - Only call additional tools if critical data is still missing
+        
         {self.__tip_section()}
 
         Use the most recent quarterly and annual data.
       """),
       expected_output="A comprehensive quantitative financial analysis with detailed tables of all key metrics, ratios, growth rates, and peer comparisons.",
       tools=[
-        scrape_tool,
         calculate,
-        get_company_filings,
         get_financial_metrics,
         get_financial_statements,
         get_stock_prices,
-        stock_screener,
         get_key_financial_ratios
       ],
       agent=agent
@@ -118,12 +123,16 @@ class StockAnalysisTasks():
         1. DO NOT include a main title like "## SEC Filings & Earnings Analysis" at the beginning.
         2. DO NOT use bold text like "**SEC Filings & Earnings Analysis**" for the main section title. Just write the findings normally.
         3. If the company is foreign (e.g. Indian companies on NSE/BSE) they DO NOT file with the US SEC. Do NOT state that filings are unavailable just because they aren't on EDGAR. Search for their local equivalent filings or earnings press releases instead! Only state filings are unavailable if the company is completely private with zero public financial disclosures.
+        
+        EFFICIENCY RULES:
+        - Use at most 2 tool calls total
+        - Start with get_company_filings for filings data
+        - Do NOT scrape external websites
 
         {self.__tip_section()}        
       """),
       expected_output="An expanded report highlighting significant findings from SEC filings, including red flags and positive indicators.",
       tools=[
-        scrape_tool,
         get_company_filings
       ],
       agent=agent
@@ -132,6 +141,9 @@ class StockAnalysisTasks():
   def recommend(self, agent):
     return Task(description=dedent(f"""
         Create a PROFESSIONAL INVESTMENT REPORT with comprehensive numerical data.
+        
+        IMPORTANT: Use the data and context from the PREVIOUS tasks (research, financial analysis, filings).
+        Only make additional tool calls if absolutely critical data is missing.
         
         Your report MUST include these sections with EXACT NUMBERS:
         
@@ -192,20 +204,20 @@ class StockAnalysisTasks():
         3. ALWAYS format markdown tables correctly with PROPER NEWLINES. Each row of a table MUST be on a new line. Do NOT combine table rows into a single continuous line.
         4. ALWAYS use actual numbers if available.
         5. In the Investment Thesis section, simply provide the bullet points. DO NOT output the literal text "(3-5 bullet points)".
+        
+        EFFICIENCY RULES:
+        - Use at most 2-3 tool calls total
+        - Most data should already be available from previous tasks
+        - Do NOT re-fetch data that previous agents already gathered
 
         {self.__tip_section()}
       """),
       expected_output="A professional investment report with comprehensive tables, metrics, ratios, and data-driven recommendations in MARKDOWN format.",
       tools=[
-        scrape_tool,
-        search_internet,
         calculate,
-        yahoo_finance_news,
-        get_insider_trades,
-        get_institutional_ownership,
         get_key_financial_ratios,
-        get_financial_metrics,
-        get_stock_prices
+        get_insider_trades,
+        get_institutional_ownership
       ],
       agent=agent,
       output_file='new-blog-post.md'
@@ -213,4 +225,3 @@ class StockAnalysisTasks():
 
   def __tip_section(self):
     return "If you do your BEST WORK, I'll give you a ₹10,000 commission!"
-
