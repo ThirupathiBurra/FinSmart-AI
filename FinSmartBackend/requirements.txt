@@ -19,4 +19,6 @@ torchvision
 torchaudio
 crewai
 crewai-tools
+litellm
 yfinance
+pypdf

@@ -83,33 +83,99 @@ export default function ChatBot() {
     setInput('');
     setMessages(prev => [...prev, { role: 'user', text: userMessage.trim() }]);
     setLoading(true);
-    try {
-      let bot = '';
-      if (sessionId) {
+
+    // ── Document / RAG path — unchanged ────────────────────────────────────────
+    if (sessionId) {
+      try {
         const res = await axios.post('http://localhost:8000/api/rag/query', {
           question: userMessage.trim(), user_id: USER_ID, session_id: sessionId,
         });
         const d = res.data;
-        bot = d.answer || 'No answer returned.';
+        let bot = d.answer || 'No answer returned.';
         if (d.sources?.length) bot += `\n\n---\n*Sources: ${d.sources.join(' · ')}*`;
-      } else {
-        const res = await axios.post('http://localhost:8000/api/finance_rag/query', { query: userMessage.trim() });
-        const d = res.data;
-        if (d.type === 'general_finance_question' || d.type === 'general_answer') {
-          bot = d.response;
-        } else if (d.type === 'personal_finance_data' || d.type === 'financial_analysis') {
-          bot = `### Financial Summary\n| Metric | Value |\n|---|---|\n| Income | ₹${d.cash_flow_summary?.total_income?.toLocaleString()} |\n| Expenses | ₹${d.cash_flow_summary?.total_expenses?.toLocaleString()} |\n| Net Savings | ₹${d.cash_flow_summary?.net_savings?.toLocaleString()} (${d.cash_flow_summary?.savings_percentage}%) |\n\n### AI Guidance\n${d.investment_guidance}`;
-        } else {
-          bot = d.response || JSON.stringify(d, null, 2);
+        setMessages(prev => [...prev, { role: 'assistant', text: bot }]);
+      } catch (err) {
+        setMessages(prev => [...prev, { role: 'error', text: err.response?.data?.detail || 'Failed to connect to AI engine.' }]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // ── General Finance chat — SSE streaming ───────────────────────────────────
+    // Add an empty assistant bubble that we'll fill incrementally
+    setMessages(prev => [...prev, { role: 'assistant', text: '' }]);
+
+    try {
+      const response = await fetch('http://localhost:8000/api/finance_rag/query/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: userMessage.trim() }),
+      });
+
+      if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        // Keep the last incomplete line in buffer
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
+          if (payload === '[DONE]') break;
+
+          try {
+            const { chunk, error } = JSON.parse(payload);
+            if (error) {
+              setMessages(prev => {
+                const msgs = [...prev];
+                msgs[msgs.length - 1] = { role: 'error', text: `Streaming error: ${error}` };
+                return msgs;
+              });
+              break;
+            }
+            if (chunk) {
+              // Append chunk to the last assistant bubble — no flicker, no full overwrite
+              setMessages(prev => {
+                const msgs = [...prev];
+                const last = msgs[msgs.length - 1];
+                msgs[msgs.length - 1] = { ...last, text: last.text + chunk };
+                return msgs;
+              });
+            }
+          } catch {
+            // Malformed JSON chunk — skip silently
+          }
         }
       }
-      setMessages(prev => [...prev, { role: 'assistant', text: bot }]);
     } catch (err) {
-      setMessages(prev => [...prev, { role: 'error', text: err.response?.data?.detail || 'Failed to connect to AI engine.' }]);
+      // Fallback: if streaming totally fails, replace the empty bubble with an error
+      setMessages(prev => {
+        const msgs = [...prev];
+        const last = msgs[msgs.length - 1];
+        // If we got partial content already, keep it; otherwise show error
+        if (!last.text) {
+          msgs[msgs.length - 1] = {
+            role: 'error',
+            text: 'Failed to connect to AI engine. Please check the backend is running.',
+          };
+        }
+        return msgs;
+      });
     } finally {
       setLoading(false);
     }
   };
+
 
   const quickActions = sessionId ? QUICK_ACTIONS_DOC : QUICK_ACTIONS_GENERAL;
 

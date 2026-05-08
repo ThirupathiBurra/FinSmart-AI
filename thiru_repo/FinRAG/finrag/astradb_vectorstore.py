@@ -21,13 +21,14 @@ class FinRAGVectorStore:
         self._ensure_collection_exists()
 
         # Initialize LangChain vectorstore wrapper
+        # autodetect_collection=True: reads existing collection settings from AstraDB
+        # instead of trying to re-impose settings, which causes a 400 error on existing collections.
         self.vectorstore = AstraDBVectorStore(
             embedding=self.embedding,
             collection_name=COLLECTION_NAME,
             api_endpoint=ASTRA_DB_API_ENDPOINT,
             token=ASTRA_DB_APPLICATION_TOKEN,
-            autodetect_collection=False,
-            content_field="page_content"
+            autodetect_collection=True,
         )
 
     def _ensure_collection_exists(self):

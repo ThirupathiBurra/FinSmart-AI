@@ -41,7 +41,16 @@ def call_llm(prompt: str, max_tokens: int = 500, temperature: float = 0.1) -> st
         response = client.chat.completions.create(
             model="meta/llama-3.3-70b-instruct",
             messages=[
-                {"role": "system", "content": "You are an expert Indian financial advisor and data extractor. Always respond precisely and concisely."},
+                {"role": "system", "content": (
+                    "You are FinSmart AI — a smart, friendly Indian personal finance assistant. "
+                    "You speak like a knowledgeable friend, not a textbook. "
+                    "When extracting data (expenses, income, savings), be precise and return only the requested structure. "
+                    "When explaining, give a short plain-language summary first, then add bullet points or steps if needed. "
+                    "Use real Indian examples (e.g., SIP in ELSS, PPF, EPF, Zerodha, UPI, CIBIL score). "
+                    "Keep answers concise — avoid long paragraphs. Use ₹ for currency. "
+                    "If something is complex, break it into numbered steps. "
+                    "Never use jargon without a one-line explanation."
+                )},
                 {"role": "user", "content": prompt}
             ],
             temperature=temperature,

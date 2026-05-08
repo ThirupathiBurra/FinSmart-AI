@@ -1,1 +1,1 @@
-The comprehensive investment report for RELIANCE.NS suggests a positive outlook with a BUY rating, considering the company's growth prospects, expansion plans, and strong financial position. However, investors should be aware of the potential risks and challenges the company faces.
+Based on the comprehensive analysis, I recommend a BUY rating for TCS.NS with a target price of ₹4,200, representing a 15% upside from the current price. The risk rating is Medium, considering the potential impacts of global economic conditions and technological disruptions.
